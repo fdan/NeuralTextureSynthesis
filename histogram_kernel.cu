@@ -90,8 +90,8 @@ at::Tensor computeHistogram(at::Tensor const &t, unsigned int numBins)
   
   unsigned int c = unsqueezed.size(0);     // Number od channels
   unsigned int n = unsqueezed.numel() / c; // Number of element per channel
-  at::Tensor min = torch::min_values(unsqueezed, 1, true).cuda();
-  at::Tensor max = torch::max_values(unsqueezed, 1, true).cuda();
+  at::Tensor min = torch::amin(unsqueezed, 1, true).cuda();
+  at::Tensor max = torch::amax(unsqueezed, 1, true).cuda();
 
   at::Tensor h = at::zeros({int(c), int(numBins)}, unsqueezed.type()).cuda();
   computeHistogram<<<(c*n) / THREAD_COUNT + 1, THREAD_COUNT>>>(unsqueezed.data<float>(),
@@ -133,8 +133,8 @@ void matchHistogram(at::Tensor &featureMaps, at::Tensor &targetHistogram)
   cudaMalloc(&localIndexes, c * nBins * sizeof(unsigned int));
   cudaMemset(localIndexes, 0, c * nBins * sizeof(unsigned int));
 
-  at::Tensor min = torch::min_values(unsqueezed, 1, true).cuda();
-  at::Tensor max = torch::max_values(unsqueezed, 1, true).cuda();
+  at::Tensor min = torch::amin(unsqueezed, 1, true).cuda();
+  at::Tensor max = torch::amax(unsqueezed, 1, true).cuda();
 
   buildSortedLinkmap<<<(c*n) / THREAD_COUNT + 1, THREAD_COUNT>>>(featureMaps.data<float>(), linkMap, featuresHistogram.data<float>(), localIndexes, randomIndices[featureMaps.numel()].data<long>(), min.data<float>(), max.data<float>(), c, n, nBins);
   rebuild<<<(c*n) / THREAD_COUNT + 1, THREAD_COUNT>>>(featureMaps.data<float>(), linkMap, targetHistogram.data<float>(), scale, c, n, nBins);
