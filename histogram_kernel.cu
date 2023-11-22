@@ -57,7 +57,7 @@ __global__ void buildSortedLinkmap(float *tensor, unsigned int *linkMap, float *
       int localIndex = atomicAdd(&localIndexes[(channel * nBins) + binIndex], 1);
       // Retrieve the number of pixel in all bin lower (in cummulative histogram)
       //      unsigned int lowerPixelCount = cumulativeHistogram[(channel * 256) + binIndex];
-      unsigned int lowerPixelCount = cumulativeHistogram[(channel * nBine) + binIndex];
+      unsigned int lowerPixelCount = cumulativeHistogram[(channel * nBins) + binIndex];
       // Set the linkmap for indes to it's position as "pseudo-sorted"
       linkMap[index] = lowerPixelCount + localIndex;
     }
