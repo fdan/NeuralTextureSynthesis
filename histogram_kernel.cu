@@ -10,17 +10,23 @@
 
 #define THREAD_COUNT 1024
 
-__global__ void computeHistogram(float *tensor, float *histogram, float *minv, float *maxv, unsigned int channels, unsigned int tensorSize, unsigned int nBins)
+__global__ void computeHistogram(float *tensor, float *histogram, float *minv,
+                                 float *maxv, unsigned int channels,
+                                 unsigned int tensorSize, unsigned int nBins)
 {
   unsigned int index = threadIdx.x + blockIdx.x * blockDim.x;
   if (index < channels * tensorSize)
     {
       // Compute which channel we're in
       unsigned int channel = index / tensorSize;
+
       // Normalize the value in range [0, numBins]
-      float value = (tensor[index] - minv[channel]) / (maxv[channel] - minv[channel]) * float(nBins);
+      float value = (tensor[index] - minv[channel]) / (maxv[channel]
+                     - minv[channel]) * float(nBins);
+
       // Compute bin index
       int bin = min((unsigned int)(value), nBins - 1);
+
       // Increment relevant bin
       atomicAdd(histogram + (channel * nBins) + bin, 1);
     }
@@ -39,7 +45,9 @@ __global__ void accumulateHistogram(float *histogram, unsigned int nBins)
     }
 }
 
-__global__ void buildSortedLinkmap(float *tensor, unsigned int *linkMap, float *cumulativeHistogram, unsigned int *localIndexes, long *indirection, float *minv, float *maxv, unsigned int channels, unsigned int tensorSize, unsigned int nBins)
+__global__ void buildSortedLinkmap(float *tensor, unsigned int *linkMap, float *cumulativeHistogram,
+                                   unsigned int *localIndexes, long *indirection, float *minv, float *maxv,
+                                   unsigned int channels, unsigned int tensorSize, unsigned int nBins)
 {
   unsigned int index = threadIdx.x + blockIdx.x* blockDim.x;
   if (index < channels * tensorSize)
@@ -63,7 +71,8 @@ __global__ void buildSortedLinkmap(float *tensor, unsigned int *linkMap, float *
     }
 }
 
-__global__ void rebuild(float *tensor, unsigned int *linkMap, float *targetHistogram, float scale, unsigned int channels, unsigned int tensorSize, unsigned int nBins)
+__global__ void rebuild(float *tensor, unsigned int *linkMap, float *targetHistogram, float scale,
+                        unsigned int channels, unsigned int tensorSize, unsigned int nBins)
 {
   unsigned int index = threadIdx.x + blockIdx.x* blockDim.x;
   if (index < channels * tensorSize)
@@ -88,12 +97,16 @@ at::Tensor computeHistogram(at::Tensor const &t, unsigned int numBins)
   if (unsqueezed.ndimension() > 2)
     unsqueezed = unsqueezed.view({unsqueezed.size(0), -1});
   
-  unsigned int c = unsqueezed.size(0);     // Number od channels
+  unsigned int c = unsqueezed.size(0);     // Number of channels
   unsigned int n = unsqueezed.numel() / c; // Number of element per channel
+
   at::Tensor min = torch::amin(unsqueezed, 1, true).cuda();
   at::Tensor max = torch::amax(unsqueezed, 1, true).cuda();
 
   at::Tensor h = at::zeros({int(c), int(numBins)}, unsqueezed.type()).cuda();
+
+  // <<< threads per block, blocks per grid >>>
+  // grid contains blocks which contain threads
   computeHistogram<<<(c*n) / THREAD_COUNT + 1, THREAD_COUNT>>>(unsqueezed.data<float>(),
     							       h.data<float>(),
     							       min.data<float>(),
@@ -123,7 +136,9 @@ void matchHistogram(at::Tensor &featureMaps, at::Tensor &targetHistogram)
   float scale = float(featureMaps.numel()) / targetHistogram.sum().item<float>();
  
   at::Tensor featuresHistogram = computeHistogram(unsqueezed, nBins);
+
   accumulateHistogram<<<c, 1>>>(featuresHistogram.data<float>(), nBins);
+
   accumulateHistogram<<<c, 1>>>(targetHistogram.data<float>(), nBins);
 
   unsigned int *linkMap = NULL;
@@ -137,6 +152,7 @@ void matchHistogram(at::Tensor &featureMaps, at::Tensor &targetHistogram)
   at::Tensor max = torch::amax(unsqueezed, 1, true).cuda();
 
   buildSortedLinkmap<<<(c*n) / THREAD_COUNT + 1, THREAD_COUNT>>>(featureMaps.data<float>(), linkMap, featuresHistogram.data<float>(), localIndexes, randomIndices[featureMaps.numel()].data<long>(), min.data<float>(), max.data<float>(), c, n, nBins);
+
   rebuild<<<(c*n) / THREAD_COUNT + 1, THREAD_COUNT>>>(featureMaps.data<float>(), linkMap, targetHistogram.data<float>(), scale, c, n, nBins);
 
   featureMaps.div_(float(nBins));
