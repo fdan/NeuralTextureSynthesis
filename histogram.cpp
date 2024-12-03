@@ -3,10 +3,14 @@
 
 
 at::Tensor computeHistogram(at::Tensor const &t, unsigned int numBins = 256);
+at::Tensor computeHistogramMasked(at::Tensor const &t, at::Tensor const &m, unsigned int numBins = 256);
 void matchHistogram(at::Tensor &featureMaps, at::Tensor &targetHistogram);
+void matchHistogramMasked(at::Tensor &featureMaps, at::Tensor &mask, at::Tensor &targetHistogram);
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
 {
   m.def("computeHistogram", &computeHistogram, "ComputeHistogram");
+  m.def("computeHistogramMasked", &computeHistogramMasked, "ComputeHistogramMasked");  
   m.def("matchHistogram", &matchHistogram, "MatchHistogram");
+  m.def("matchHistogramMasked", &matchHistogramMasked, "MatchHistogramMasked");
 }
