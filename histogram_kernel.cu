@@ -28,9 +28,10 @@ __global__ void computeHistogram(float *tensor, float *histogram, float *minv,
     }
 }
 
-__global__ void computeHistogramMasked(float *tensor, float *mask, float *histogram, float *minv,
-                                       float *maxv, unsigned int channels, unsigned int tensorSize,
-                                       unsigned int nBins) {
+__global__ void computeHistogramMasked(float *tensor, float *mask, float *histogram,
+                                       float *minv, float *maxv, unsigned int channels,
+                                       unsigned int tensorSize, unsigned int nBins,
+                                       float histThreshold) {
     unsigned int index = threadIdx.x + blockIdx.x * blockDim.x;
     int masked = 0;
     int unmasked = 0;
@@ -42,14 +43,16 @@ __global__ void computeHistogramMasked(float *tensor, float *mask, float *histog
         // Normalize the value in range [0, numBins]
         float value = (tensor[index] - minv[channel]) / (maxv[channel] - minv[channel])* float(nBins);
         // get the mask value
+
         float maskValue = mask[index];
+
         if (maskValue != 0.f)
         {
-            // Compute bin index
             int bin = min((unsigned int) (value), nBins - 1);
-            // Increment relevant bin
             atomicAdd(histogram + (channel * nBins) + bin, 1);
         }
+
+
     }
 }
 
@@ -94,7 +97,7 @@ __global__ void buildSortedLinkmap(float *tensor, unsigned int *linkMap, float *
 __global__ void buildSortedLinkmapMasked(float *tensor, float *mask, unsigned int *linkMap,
                                          float *cumulativeHistogram, unsigned int *localIndexes, long *indirection,
                                          float *minv, float *maxv, unsigned int channels, unsigned int tensorSize,
-                                         unsigned int nBins)
+                                         unsigned int nBins, float histThreshold)
 {
     unsigned int index = threadIdx.x + blockIdx.x* blockDim.x;
     if (index < channels * tensorSize)
@@ -105,13 +108,14 @@ __global__ void buildSortedLinkmapMasked(float *tensor, float *mask, unsigned in
         unsigned int channel = index / tensorSize;
         // Normalize the value in range [0, numBins]
         float value = (tensor[index] - minv[channel]) / (maxv[channel] - minv[channel]) * float(nBins);
-        // get the mask value
-        float maskValue = mask[index];
         // Compute bin index
         int binIndex = min((unsigned int)(value), nBins - 1);
 
-        if (maskValue != 0.f)
-        {
+        // get the mask value
+        float maskValue = mask[index];
+
+//        if (maskValue > histThreshold){
+        if (maskValue != 0.f){
             // Increment and retrieve the number of pixel in said bin
             int localIndex = atomicAdd(&localIndexes[(channel * 256) + binIndex], 1);
             // Retrieve the number of pixel in all bin lower (in cummulative histogram)
@@ -119,6 +123,8 @@ __global__ void buildSortedLinkmapMasked(float *tensor, float *mask, unsigned in
             // Set the linkmap for indes to it's position as "pseudo-sorted"
             linkMap[index] = lowerPixelCount + localIndex;
         }
+
+
     }
 }
 
@@ -132,65 +138,92 @@ __global__ void rebuild(float *tensor, unsigned int *linkMap, float *targetHisto
       unsigned int channel = index / tensorSize;
       unsigned int value = 0;
       for (int i=0 ; i < 256 ; ++i)
-	if (linkMap[index] >= targetHistogram[(channel * 256) + i] * scale) value = i;
+	  if (linkMap[index] >= targetHistogram[(channel * 256) + i] * scale) value = i;
       tensor[index] = (float)value;
     }
 }
 
 
-__global__ void rebuildMasked(float *tensor, float *mask, unsigned int *linkMap,
+__global__ void rebuildMasked(float *featureMaps, float *mask, unsigned int *linkMap,
                               float *targetHistogram, float scale, unsigned int channels,
-                              unsigned int tensorSize, unsigned int nBins)
+                              unsigned int tensorSize, unsigned int nBins,
+                              float histThreshold)
 {
     unsigned int index = threadIdx.x + blockIdx.x* blockDim.x;
     if (index < channels * tensorSize)
     {
         unsigned int channel = index / tensorSize;
         unsigned int value = 0;
+
         float maskValue = mask[index];
+
+//        if (maskValue > histThreshold){
         if (maskValue != 0.f)
         {
             for (int i = 0; i < nBins; ++i)
+            {
                 if (linkMap[index] >= targetHistogram[(channel * nBins) + i] * scale)
                 {
                     value = i;
                 }
-            tensor[index] = (float) value;
+            }
+            featureMaps[index] = (float) value;
+//            featureMaps[index] = (float) value * maskValue;
         }
+
+        else
+        {
+            featureMaps[index] = 0.f;
+        }
+
+//        for (int i = 0; i < nBins; ++i){
+//            if (linkMap[index] >= targetHistogram[(channel * nBins) + i] * scale){
+//                value = i;
+//            }
+//        }
+
+//        featureMaps[index] = (float) value;
+
     }
 }
 
 
-__global__ void maskedMin(float *tensor, float *mask, float nonZero, unsigned int channels,
-                          unsigned int tensorSize, unsigned int nBins)
+//__global__ void maskedMin(float *tensor, float *mask, float nonZero, unsigned int channels,
+//                          unsigned int tensorSize, unsigned int nBins, float histThreshold)
+//{
+//    unsigned int index = threadIdx.x + blockIdx.x* blockDim.x;
+//    if (index < channels * tensorSize)
+//    {
+//        float maskValue = mask[index];
+//
+//        if (maskValue > histThreshold) {
+//            float value = (tensor[index] - minv[channel]) / (maxv[channel] - minv[channel]) * float(nBins);
+//            nonZero[index] = value;
+//        }
+//    }
+//}
+
+
+__global__ void maskedDiv(float *tensor, float *mask, unsigned int nBins,
+                          unsigned int channels, unsigned int tensorSize,
+                          float histThreshold)
 {
     unsigned int index = threadIdx.x + blockIdx.x* blockDim.x;
     if (index < channels * tensorSize)
     {
         float maskValue = mask[index];
-        if (maskValue != 0.f) {
-            float value = (tensor[index] - minv[channel]) / (maxv[channel] - minv[channel]) * float(nBins);
-            nonZero[index] = value;
-        }
-    }
-}
 
-
-__global__ void maskedDiv(float *tensor, float *mask, unsigned int nBins, unsigned int channels,
-                          unsigned int tensorSize)
-{
-    unsigned int index = threadIdx.x + blockIdx.x* blockDim.x;
-    if (index < channels * tensorSize)
-    {
-        float maskValue = mask[index];
-        if (maskValue != 0.f) {
+        if (maskValue != 0.f)
+        {
             tensor[index] = tensor[index] / float(nBins);
         }
+
     }
 }
 
 
-at::Tensor computeHistogramMasked(at::Tensor const &t, at::Tensor const &m, unsigned int numBins)
+at::Tensor computeHistogramMasked(at::Tensor const &t, at::Tensor const &m,
+                                  float histThreshold, unsigned int numBins)
 {
   at::Tensor unsqueezed(t);
   unsqueezed = unsqueezed.cuda();
@@ -205,6 +238,9 @@ at::Tensor computeHistogramMasked(at::Tensor const &t, at::Tensor const &m, unsi
   at::Tensor min = torch::amin(unsqueezed, 1, true).cuda();
   at::Tensor max = torch::amax(unsqueezed, 1, true).cuda();
 
+  torch::nn::Threshold model(torch::nn::ThresholdOptions(histThreshold, 0.0).inplace(true));
+  model(mask);
+
   at::Tensor unsqueezedMask(m);
   unsqueezedMask = unsqueezedMask.cuda();
   if (unsqueezedMask.ndimension() == 1)
@@ -214,6 +250,11 @@ at::Tensor computeHistogramMasked(at::Tensor const &t, at::Tensor const &m, unsi
 
   unsigned int mc = unsqueezed.size(0);     // Number of channels
   unsigned int mn = unsqueezed.numel() / c; // Number of element per channel
+
+//  at::Tensor mmin = unsqueezedMask.min();
+//  at::Tensor mmax = unsqueezedMask.max();
+//  printf("mmin: %f \n", mmin[0]);
+//  printf("mmax: %f \n", mmax[0]);
 
   at::Tensor h = at::zeros({int(c), int(numBins)}, unsqueezed.type()).cuda();
 
@@ -225,7 +266,8 @@ at::Tensor computeHistogramMasked(at::Tensor const &t, at::Tensor const &m, unsi
           max.data_ptr<float>(),
           c,
           n,
-          numBins
+          numBins,
+          histThreshold
   );
   return h;
 }
@@ -332,8 +374,11 @@ void matchHistogram(at::Tensor &featureMaps, at::Tensor &targetHistogram)
 }
 
 void matchHistogramMasked(at::Tensor &featureMaps, at::Tensor &mask,
-      at::Tensor &targetHistogram)
+      at::Tensor &targetHistogram, float histThreshold)
 {
+
+//    printf("histThreshold: %f", histThreshold);
+
 //  auto x = torch::ones({1});
   static std::map<unsigned int, at::Tensor> randomIndices;
 
@@ -350,7 +395,13 @@ void matchHistogramMasked(at::Tensor &featureMaps, at::Tensor &mask,
   if (unsqueezed.ndimension() > 2)
     unsqueezed = unsqueezed.view({unsqueezed.size(0), -1});
 
+  torch::nn::Threshold model(torch::nn::ThresholdOptions(histThreshold, 0.0).inplace(true));
+  model(mask);
+//    torch::nn::Threshold model(torch::nn::ThresholdOptions(histThreshold, 0.0));
+//    at::Tensor maskT = model(mask);
+
   at::Tensor unsqueezedMask(mask);
+//  at::Tensor unsqueezedMask(maskT);
   unsqueezedMask = unsqueezedMask.cuda();
   if (unsqueezedMask.ndimension() == 1)
     unsqueezedMask.unsqueeze_(0);
@@ -364,13 +415,20 @@ void matchHistogramMasked(at::Tensor &featureMaps, at::Tensor &mask,
 // targetHistogram.sum() is the sum of counts, i.e. how many elements does the hist count
 // scale is therefore a ratio of the number of elements in the feature maps
 // to the number of elements in the histogram.
-  float maskNonzeroCount = mask.count_nonzero().item<float>();
 
-//  float scale = mask.count_nonzero().item<float>() / targetHistogram.sum().item<float>();
-  float scale = maskNonzeroCount / targetHistogram.sum().item<float>();
+
+
+
+//  float maskNonzeroCount = mask.count_nonzero().item<float>();
+//  printf("maskNonzeroCount: %f \n", maskNonzeroCount);
+//  float scale = maskNonzeroCount / targetHistogram.sum().item<float>();
+
+//  printf("mask sum: %f \n", mask.sum().item<float>());
+//  float scale = mask.sum().item<float>() / targetHistogram.sum().item<float>();
+  float scale = mask.count_nonzero().item<float>() / targetHistogram.sum().item<float>();
 
   at::Tensor featuresHistogram = computeHistogramMasked(
-    unsqueezed, unsqueezedMask, nBins
+    unsqueezed, unsqueezedMask, histThreshold, nBins
   );
 
   accumulateHistogram<<<c, 1>>>(featuresHistogram.data_ptr<float>(), nBins);
@@ -411,7 +469,8 @@ void matchHistogramMasked(at::Tensor &featureMaps, at::Tensor &mask,
       max.data_ptr<float>(),
       c,
       n,
-      nBins
+      nBins,
+      histThreshold
   );
 
   rebuildMasked<<<(c*n) / THREAD_COUNT + 1, THREAD_COUNT>>>(
@@ -422,7 +481,8 @@ void matchHistogramMasked(at::Tensor &featureMaps, at::Tensor &mask,
       scale,
       c,
       n,
-      nBins
+      nBins,
+      histThreshold
   );
 
 // this doesn't seem to be necessary, but keep for now
@@ -431,8 +491,11 @@ void matchHistogramMasked(at::Tensor &featureMaps, at::Tensor &mask,
           mask.data_ptr<float>(),
           nBins,
           c,
-          n
+          n,
+          histThreshold
   );
+
+//  featureMaps.div_(float(nBins));
 
   cudaFree(linkMap);
   cudaFree(localIndexes);
