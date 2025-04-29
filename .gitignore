@@ -1,0 +1,14 @@
+.vscode/vc.db*
+.idea/
+.vscode/
+cmake-build-debug/
+Models/*
+.ipynb_checkpoints/
+histogram.egg-info/
+install/
+build/
+*.sif
+*.pyc
+*.pth
+*~
+*.sif
